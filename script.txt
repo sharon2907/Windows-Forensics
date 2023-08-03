@@ -1,0 +1,207 @@
+#!/bin/bash
+
+# Color variables
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No color
+
+#Checking the current user
+if [ "$EUID" -ne 0 ]
+  then echo -e "${RED}Please run as root"
+  exit
+fi
+
+# Define function to install missing forensics tools
+function forensicstools() {
+	echo -e "\nChecking if Foremost is installed..."
+	sleep 1
+	if [[ ! -z $(dpkg -s foremost 2>/dev/null) ]]
+	then
+		echo -e "It is already installed"
+		sleep 1
+	else
+		echo -e "It's not installed\nDownloading tool..."
+		sleep 1
+		apt-get install foremost -y 2>&1 >/dev/null
+	fi
+
+	echo -e "\nChecking if Bulk-extractor is installed..."
+	sleep 1
+	if [[ ! -z $(dpkg -s bulk-extractor 2>/dev/null) ]]
+	then
+		echo -e "It is already installed"
+		sleep 1
+	else
+		echo -e "It's not installed\nDownloading tool..."
+		sleep 1
+		apt-get install bulk-extractor -y 2>&1 >/dev/null
+	fi
+	
+	echo -e "\nChecking if Bulk-extractor-dbgsym is installed..."
+	sleep 1
+	if [[ ! -z $(dpkg -s bulk-extractor-dbgsym 2>/dev/null) ]]
+	then
+		echo -e "It is already installed"
+		sleep 1 
+	else
+		echo -e "It's not installed\nDownloading tool..."
+		sleep 1
+		apt-get install bulk-extractor-dbgsym -y 2>&1 >/dev/null
+	fi
+	
+	echo -e "\nChecking if Strings is installed..."
+	sleep 1
+	if [[ ! -z $(dpkg -s binutils 2>/dev/null) ]]
+	then
+		echo -e "It is already installed"
+		sleep 1
+	else
+		echo -e "It's not installed\nDownloading tool..."
+		sleep 1
+		apt-get install binutils -y 2>&1 >/dev/null
+	fi
+	
+	echo -e "\nChecking if Tree is installed..."
+	sleep 1
+	if [[ ! -z $(dpkg -s tree 2>/dev/null) ]]
+	then
+	
+		echo -e "It is already installed"
+		sleep 1
+	else
+		echo -e "It's not installed\nDownloading tool..."
+		sleep 1
+		apt-get install tree -y 2>&1 >/dev/null
+	fi
+	
+	echo -e "\nChecking if Zip is installed..."
+	sleep 1
+	if [[ ! -z $(dpkg -s zip 2>/dev/null) ]]
+	then
+		echo -e "It is already installed"
+		sleep 1
+	else
+		echo -e "It's not installed\nDownloading tool..."
+		sleep 1
+		apt-get install zip -y 2>&1 >/dev/null
+	fi
+	
+echo -e "\nChecking if Volatility is installed..."
+sleep 1
+
+if [[ -d "volatility_2.5.linux.standalone" ]]; then
+  echo -e "It is already installed"
+  sleep 1
+else
+  echo -e "It's not installed\nDownloading tool..."
+  sleep 1
+  git clone https://github.com/volatilityfoundation/volatility.git >/dev/null 2>&1
+  unzip -o "volatility_2.5.linux.standalone.zip" -d volatility_2.5.linux.standalone >/dev/null 2>&1
+fi
+
+	sleep 1
+	echo -e "\n${YELLOW}All neccessary tools have been installed${NC}\n"
+	sleep 2
+}
+forensicstools
+
+# Prompt the user to enter a file name
+echo -e "\n${RED}Enter a file name:${NC}\n"
+read -r filename
+
+# Search for the file in the current directory and its subdirectories
+filepath=$(find / -name "$filename" -print -quit)
+
+# Check if the file was found
+if [ -z "$filepath" ]; then
+  echo "File not found."
+  exit 1
+else
+  echo -e "\n${GREEN}File path: $filepath${NC}\n"
+fi
+
+output_dir="extracted_data"
+mkdir -p "$output_dir"
+
+# Carving using different tools
+	echo -e "\n${BLUE}Running Foremost...${NC}"
+foremost -t all -o "$output_dir" "$filename" 2>&1 >/dev/null
+
+	echo -e "\n${BLUE}Running Bulk Extractor...${NC}"
+bulk_extractor -o "$output_dir" "$filename"
+
+	echo -e "\n${BLUE}Running Volatility Imageinfo...${NC}"
+volatility_2.5.linux.standalone/volatility_2.5_linux_x64 -f "$filename" imageinfo > "$output_dir/volatility_imageinfo.txt"
+
+	echo -e "\n${BLUE}Running Volatility PSlist...${NC}"
+volatility_2.5.linux.standalone/volatility_2.5_linux_x64 -f "$filename" pslist > "$output_dir/volatility_pslist.txt"
+
+	echo -e "\n${BLUE}Running Strings...${NC}"
+strings "$filename" > "$output_dir/strings.txt"
+
+# Check if the output directory exists
+if [ ! -d "$output_dir" ]; then
+  echo "Output directory not found."
+  exit 1
+fi
+
+# Get the location and size of the extracted network traffic
+location=$(ls -1 "$output_dir"/* | head -n 1)
+size=$(du -h "$location" | awk '{ print $1 }')
+
+# Display the location and size to the user
+echo -e "\n${GREEN}Network data Found [Path: $location ] [Size $size]${NC}\n"
+
+# Check if .mem file can be analyzed in Volatility
+if volatility_2.5.linux.standalone/volatility_2.5_linux_x64 -f "$filename" imageinfo &> /dev/null; then
+  echo -e "${YELLOW}$filename can be analyzed in Volatility.${NC}"
+  
+  # Find memory profile and save it into a variable
+  profile=$(volatility_2.5.linux.standalone/volatility_2.5_linux_x64 -f "$filename" imageinfo | grep "Suggested Profile" | awk '{print $4}' | cut -d "," -f1)
+  echo -e "\n${GREEN}Memory profile: $profile${NC}\n"
+  
+  # Display running processes
+  echo -e "\n${BLUE}Running processes:${NC}\n"
+  volatility_2.5.linux.standalone/volatility_2.5_linux_x64 -f "$filename" --profile="$profile" pslist
+  
+  # Display network connections
+  echo -e "\n${BLUE}Network connections:${NC}\n"
+  volatility_2.5.linux.standalone/volatility_2.5_linux_x64 -f "$filename" --profile="$profile" connections 
+  
+  # Attempt to extract registry information
+  echo -e "\n${BLUE}Registry information:${NC}\n"
+  volatility_2.5.linux.standalone/volatility_2.5_linux_x64 -f "$filename" --profile="$profile" hivelist 
+else
+  echo "Cannot analyze $filename with Volatility"
+fi 
+
+# Display general statistics
+echo -e "\n${GREEN}Analysis Time: $(date)${NC}\n"
+file_count=$(find "$output_dir" -type f | wc -l)
+echo -e "\n${GREEN}Number of Found Files: $file_count${NC}\n"
+
+# Save results into a report
+report_file="analysis_report.txt"
+echo "Analysis Report" > "$report_file"
+echo "----------------" >> "$report_file"
+echo "Analysis Time: $(date)" >> "$report_file"
+echo "Number of Found Files: $file_count" >> "$report_file"
+echo "List of Extracted Files:" >> "$report_file"
+find "$output_dir" -type f >> "$report_file"
+
+# Zip the extracted files and the report file
+zip_name="analysis_results.zip"
+zip -r "$zip_name" "$output_dir" "$report_file"
+
+# Set appropriate permissions for the generated files
+chmod 777 "$output_dir" "$report_file" "$zip_name"
+
+echo -e "\n${GREEN}Extraction and Report generation completed. Results saved in $zip_name.${NC}\n"
+
+
+
+
+
+
